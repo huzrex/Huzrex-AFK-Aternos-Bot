@@ -1185,6 +1185,10 @@ function getReconnectDelay() {
 }
 
 function createBot() {
+  if (bot && botState.connected) {
+    addLog("[Bot] Already connected, skipping duplicate createBot.");
+    return;
+  }
   if (isReconnecting) {
     addLog("[Bot] Already reconnecting, skipping...");
     return;
@@ -2001,29 +2005,16 @@ process.on("uncaughtException", (err) => {
     addLog("[FATAL] Known network/protocol error - recovering gracefully...");
   }
 
-  // ALWAYS recover — bot must never stay disconnected
-  clearAllIntervals();
-  botState.connected = false;
-
-  // FIX: reset isReconnecting if it was stuck, then schedule reconnect
-  if (isReconnecting) {
-    addLog(
-      "[FATAL] isReconnecting was stuck - resetting before crash recovery",
-    );
-    isReconnecting = false;
-    // BUG FIX: was referencing non-existent 'reconnectTimeout' — correct name is 'reconnectTimeoutId'
-    if (reconnectTimeoutId) {
-      clearTimeout(reconnectTimeoutId);
-      reconnectTimeoutId = null;
-    }
+  // Only recover if the bot is actually disconnected. Previously every stray
+  // exception tore down a healthy bot and scheduled a second connection,
+  // which caused duplicate bots and instant leave/rejoin.
+  if (botState.connected && bot && bot.entity) {
+    addLog("[FATAL] Bot still connected - not reconnecting.");
+    return;
   }
-
-  setTimeout(
-    () => {
-      scheduleReconnect();
-    },
-    isNetworkError ? 5000 : 10000,
-  );
+  botState.connected = false;
+  // scheduleReconnect() already ignores duplicates while one is pending
+  scheduleReconnect();
 });
 
 process.on("unhandledRejection", (reason) => {
@@ -2042,12 +2033,11 @@ process.on("unhandledRejection", (reason) => {
     msg.includes("timed out") ||
     msg.includes("PartialReadError");
 
-  if (isNetworkError && !isReconnecting) {
+  if (isNetworkError && !isReconnecting && !botState.connected) {
     addLog("[FATAL] Network rejection — triggering reconnect...");
     clearAllIntervals();
-    botState.connected = false;
     if (bot) {
-      try { bot.end(); } catch (_) {}
+      try { bot.removeAllListeners(); bot.end(); } catch (_) {}
       bot = null;
     }
     scheduleReconnect();
