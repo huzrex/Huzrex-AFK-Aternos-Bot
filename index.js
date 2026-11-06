@@ -1225,6 +1225,22 @@ function createBot() {
 
     bot.loadPlugin(pathfinder);
 
+    // FIX: servers 1.21.2+ kick with invalid_player_movement if a second position
+    // packet arrives before a tick_end. Mineflayer releases don't send tick_end,
+    // so send one after every movement packet.
+    const rawWrite = bot._client.write.bind(bot._client);
+    bot._client.write = (name, packet) => {
+      const result = rawWrite(name, packet);
+      if (name === "position" || name === "position_look") {
+        try {
+          rawWrite("tick_end", {});
+        } catch (e) {
+          /* protocol without tick_end */
+        }
+      }
+      return result;
+    };
+
     // FIX: connection timeout - end the old bot before reconnecting to avoid ghost bots
     clearBotTimeouts();
     connectionTimeoutId = setTimeout(() => {
